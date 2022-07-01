@@ -1,1 +1,5 @@
 .cpcache/
+.clj-kondo/
+.idea/
+.lsp/
+fsdb.iml

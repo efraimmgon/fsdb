@@ -1,8 +1,9 @@
 (ns fsdb.core
   (:require
-    clojure.edn
-    [clojure.java.io :as io]
-    [me.raynes.fs :as fs])) 
+   clojure.edn
+   clojure.pprint
+   [clojure.java.io :as io]
+   [me.raynes.fs :as fs]))
 
 ;;; ----------------------------------------------------------------------------
 ;;; Filesystem-based Database
@@ -50,7 +51,7 @@
   on his code.")
 
 ;;; ----------------------------------------------------------------------------
-;;; Global vars, utils
+;;; utils
 
 (def db-dir (io/file fs/*cwd* "resources" "db"))
 (def settings-path (io/file db-dir "settings.edn"))
@@ -60,9 +61,9 @@
   [source]
   (try
     (with-open [r (io/reader source)]
-      (clojure.edn/read 
-        (java.io.PushbackReader. 
-          r)))
+      (clojure.edn/read
+       (java.io.PushbackReader.
+        r)))
 
     (catch java.io.IOException e
       (printf "Couldn't open '%s': %s\n" source (.getMessage e)))
@@ -70,12 +71,18 @@
       (printf "Error parsing edn file '%s': %s\n" source (.getMessage e)))))
 
 (defn save-edn!
-  "Save edn data to file."
-  [file data]
-  (with-open [wrt (io/writer file)]
-    (binding [*out* wrt]
-      (prn data)))
-  data)
+  "Save edn data to file.
+  Opts is a map of #{:pretty-print}."
+  ([file data] (save-edn! file data nil))
+  ([file data opts]
+   (with-open [wrt (io/writer file)]
+     (binding [*out* wrt]
+       (if (:pretty-print? opts)
+         (clojure.pprint/pprint data)
+         (prn data))))
+   data))
+
+(declare settings)
 
 (defn table-path
   "Returns the table's path to the dir where records are stored."
@@ -84,7 +91,7 @@
 
 (defn table-file
   "Return the file for the table dir/record, if it exists."
-  ([tname] 
+  ([tname]
    (table-file tname nil))
   ([tname id]
    (when-let [path (table-path tname)]
@@ -98,27 +105,27 @@
 
 ; Management of id increment
 
-(def settings 
+(def settings
   "DB settings."
   (atom nil))
 
 (defn load-settings! []
   (reset! settings (load-edn settings-path)))
 
-(load-settings!)
-
 (defn save-settings! []
-  (save-edn! settings-path @settings))
- 
-(defn next-id! 
+  (save-edn! settings-path @settings {:pretty-print? true}))
+
+(defn next-id!
   "Increment the table's counter and return the incremented number."
   [tname]
-  (get-in (swap! settings update-in [:tables tname :counter] inc)
+  (swap! settings update-in
+         [:tables tname :counter] inc)
+  (save-settings!)
+  (get-in @settings
           [:tables tname :counter]))
 
 (defn setup!
-  "Must be run the first time the program is used to setup the db dirs and
-  settings file."
+  "Checks if the db path and the settings file are set, otherwise will do it."
   []
   (when-not (fs/exists? db-dir)
     (fs/mkdirs db-dir))
@@ -126,11 +133,12 @@
     (save-edn! settings-path {}))
   (load-settings!))
 
+(setup!)
 
 ;;; ----------------------------------------------------------------------------
 ;;; CREATE, DELETE TABLE
 
-(defn create-table
+(defn create-table!
   "Creates the settings for the table. These settings will be used when 
   querying the table."
   [tname]
@@ -142,8 +150,8 @@
       (fs/mkdir table-path)
       ;; Update the settings with the new table config.
       (save-edn!
-        settings-path
-        (swap! settings assoc-in [:tables tname] config)))))
+       settings-path
+       (swap! settings assoc-in [:tables tname] config)))))
 
 (defn delete-table!
   "Deletes all data and settings related to the given table."
@@ -151,15 +159,15 @@
   (when-let [dir (table-path tname)]
     (fs/delete-dir dir)
     (save-edn!
-      settings-path
-      (swap! settings update :tables dissoc tname))))
+     settings-path
+     (swap! settings update :tables dissoc tname))))
 
 
 ;;; ----------------------------------------------------------------------------
 ;;; GET, SAVE, DELETE
 
 ; All files are expected to contain edn objects, so we just use
-; clojure.edn.read when loading them from the file.
+; clojure.edn/read when loading them from the file.
 
 (defn get-by-id
   "Reads and returns the contents of the given file."
@@ -172,7 +180,8 @@
   [tname]
   (some->> (table-file tname)
            fs/list-dir
-           (mapv get-by-path)))
+           (map fs/name)
+           (map #(get-by-id tname %))))
 
 (defn create!
   "Creates a new table record. Returns the data with the id."
@@ -184,12 +193,12 @@
     (save-edn! (io/file
                 (table-path tname)
                 (str id))
-              data)))
+               data)))
 
 (defn update!
   "Updates the record for the given table id."
   [tname data]
-  (when-let [f (table-file tname 
+  (when-let [f (table-file tname
                            (get data (keyword (name tname) "id")))]
     (save-edn! f data)))
 
@@ -205,9 +214,11 @@
 ; - id counter 
 
 (comment
-  "tests"
+
+  "tests:"
+
   (delete-table! :user)
-  (create-table :user)
+  (create-table! :user)
   (get-by-id :user 1)
   (get-all :user)
   (create! :user {:user/name "Guest"})
